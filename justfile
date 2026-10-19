@@ -1,7 +1,7 @@
 all: check build embedded clippy check-fmt docs test coverage
 
 clippy:
-  cargo clippy -- -D warnings
+  cargo clippy --workspace -- -D warnings
 
 fmt:
   cargo fmt --all
@@ -10,14 +10,14 @@ check-fmt:
   cargo fmt --all -- --check
 
 check:
-  cargo check --features "serde, defmt"
+  cargo check --workspace --features "serde, defmt"
 
 test:
-  cargo nextest r --features "serde, defmt"
+  cargo nextest r --workspace --features "serde, defmt"
   cargo test --doc
 
 build:
-  cargo build --features "serde, defmt"
+  cargo build --workspace --features "serde, defmt"
 
 embedded:
   cargo build --target thumbv7em-none-eabihf --no-default-features --features "defmt, packet-buf-1k"

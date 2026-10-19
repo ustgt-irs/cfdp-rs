@@ -60,7 +60,7 @@ use spacepackets::{
             metadata::{MetadataGenericParams, MetadataPduReader},
             nak::{NakPduCreator, NakPduCreatorWithReservedSeqReqsBuf},
         },
-        tlv::{EntityIdTlv, GenericTlv, ReadableTlv, TlvType, msg_to_user::MsgToUserTlv},
+        tlv::{EntityIdTlv, GenericTlv, TlvType, msg_to_user::MsgToUserTlv},
     },
     util::UnsignedByteField,
 };
@@ -956,7 +956,7 @@ impl<
                     )
                     .unwrap()
                 };
-                let written_len = nak_pdu.write_to_bytes(self.pdu_and_cksum_buffer.get_mut())?;
+                let written_len = nak_pdu.write_to_slice(self.pdu_and_cksum_buffer.get_mut())?;
                 self.pdu_sender.send_file_directive_pdu(
                     FileDirectiveType::Nak,
                     &self.pdu_and_cksum_buffer.borrow()[0..written_len],
@@ -1152,7 +1152,7 @@ impl<
             eof_pdu.condition_code(),
             TransactionStatus::Active,
         );
-        let written_len = ack_pdu.write_to_bytes(self.pdu_and_cksum_buffer.get_mut())?;
+        let written_len = ack_pdu.write_to_slice(self.pdu_and_cksum_buffer.get_mut())?;
         self.pdu_sender.send_file_directive_pdu(
             FileDirectiveType::Ack,
             &self.pdu_and_cksum_buffer.borrow()[0..written_len],
@@ -1945,7 +1945,7 @@ impl<
                 tstate.finished_params.fault_location_finished.get(),
             )
         };
-        finished_pdu.write_to_bytes(self.pdu_and_cksum_buffer.get_mut())?;
+        finished_pdu.write_to_slice(self.pdu_and_cksum_buffer.get_mut())?;
         self.pdu_sender.send_file_directive_pdu(
             FileDirectiveType::Finished,
             &self.pdu_and_cksum_buffer.borrow()[0..finished_pdu.len_written()],
@@ -1976,7 +1976,7 @@ mod tests {
             },
             tlv::msg_to_user::MsgToUserTlv,
         },
-        util::{UnsignedByteFieldU8, UnsignedEnum},
+        util::UnsignedByteFieldU8,
     };
 
     use crate::{
@@ -2198,7 +2198,7 @@ mod tests {
             let filedata_pdu =
                 FileDataPdu::new_no_seg_metadata(pdu_header, offset, file_data_chunk);
             filedata_pdu
-                .write_to_bytes(&mut self.buf)
+                .write_to_slice(&mut self.buf)
                 .expect("writing file data PDU failed");
             let packet_info = PduRawWithInfo::new(&self.buf).expect("creating packet info failed");
             let result = self.handler.state_machine(user, Some(&packet_info));
@@ -2404,7 +2404,7 @@ mod tests {
         buf: &'a mut [u8],
     ) -> PduRawWithInfo<'a> {
         let written_len = pdu
-            .write_to_bytes(buf)
+            .write_to_slice(buf)
             .expect("writing metadata PDU failed");
         PduRawWithInfo::new(&buf[..written_len]).expect("generating packet info failed")
     }
@@ -2924,7 +2924,7 @@ mod tests {
             let msg_to_user =
                 MsgToUserTlv::new(&msg_value).expect("creating msg to user tlv failed");
             opts_len += msg_to_user
-                .write_to_bytes(&mut opts_buf[opts_len..])
+                .write_to_slice(&mut opts_buf[opts_len..])
                 .expect("writing msg to user tlv failed");
         }
         let pdu_header = PduHeader::new_for_file_directive(tb.pdu_conf, 0);
@@ -2963,7 +2963,7 @@ mod tests {
         let msg_to_user = MsgToUserTlv::new(&msg_value).expect("creating msg to user tlv failed");
         let mut opts_buf = [0u8; 64];
         let opts_len = msg_to_user
-            .write_to_bytes(&mut opts_buf)
+            .write_to_slice(&mut opts_buf)
             .expect("writing msg to user tlv failed");
         let pdu_header = PduHeader::new_for_file_directive(tb.pdu_conf, 0);
         let metadata_pdu = MetadataPduCreator::new_with_opts(
@@ -3008,7 +3008,7 @@ mod tests {
         let msg_to_user = MsgToUserTlv::new(&msg_value).expect("creating msg to user tlv failed");
         let mut opts_buf = [0u8; 64];
         let opts_len = msg_to_user
-            .write_to_bytes(&mut opts_buf)
+            .write_to_slice(&mut opts_buf)
             .expect("writing msg to user tlv failed");
         let pdu_header = PduHeader::new_for_file_directive(tb.pdu_conf, 0);
         let metadata_pdu = MetadataPduCreator::new_with_opts(

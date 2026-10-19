@@ -34,6 +34,13 @@ Rust features.
 You can check the [documentation](https://docs.rs/cfdp-rs) of individual modules for various usage
 examples.
 
+The [examples](examples) folder contains the following applications:
+
+- [`cfdp-cli-udp`](examples/cfdp-cli-udp): Two CFDP entities as separate applications which
+  exchange PDUs via UDP. Shows regular file transfers and proxy put requests.
+- [`python-interop`](examples/python-interop): Interoperability with the
+  [cfdp-py](https://github.com/us-irs/cfdp-py) Python implementation via UDP.
+
 # Coverage
 
 Coverage can be generated using [`llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov). If you have not done so
