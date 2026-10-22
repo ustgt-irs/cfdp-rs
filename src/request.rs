@@ -341,6 +341,9 @@ impl<const BUF_SIZE: usize> StaticPutRequestCacher<BUF_SIZE> {
         put_request: &impl ReadablePutRequest,
     ) -> Result<(), ByteConversionError> {
         self.static_fields.destination_id = put_request.destination_id();
+        // Reset source and destination file lengths in any case.
+        self.static_fields.source_file_len = 0;
+        self.static_fields.dest_file_len = 0;
         if let Some(source_file) = put_request.source_file() {
             if source_file.len() > u8::MAX as usize {
                 return Err(ByteConversionError::ToSliceTooSmall {
@@ -793,6 +796,24 @@ mod tests {
         assert_eq!(put_request_cached.static_fields.source_file_len, 0);
         assert_eq!(put_request_cached.static_fields.dest_file_len, 0);
         assert_eq!(put_request_cached.opts_len(), 0);
+    }
+
+    #[test]
+    fn test_put_request_cacher_set_overwrites_file_names() {
+        let mut put_request_cached = StaticPutRequestCacher::<128>::new();
+        let put_request = PutRequest::new_regular_request(
+            DEST_ID.into(),
+            "/tmp/hello.txt",
+            "/tmp/hello2.txt",
+            None,
+            None,
+        )
+        .unwrap();
+        put_request_cached.set(&put_request).unwrap();
+        let put_request = PutRequest::new_msgs_to_user_only(DEST_ID.into(), &[]).unwrap();
+        put_request_cached.set(&put_request).unwrap();
+        assert!(!put_request_cached.has_source_file());
+        assert!(!put_request_cached.has_dest_file());
     }
 
     #[test]
