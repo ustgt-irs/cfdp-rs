@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   send and expect an EOF (No error) PDU, as required by 4.6.1.1.9 case (C). The source handler no
   longer tries to checksum a source file that does not exist for this case, and the destination
   handler no longer tries to create or truncate a destination file that was never named.
+- `StaticPutRequestCacher::set` now clears the source and destination file names when the new
+  request has none. A metadata-only put request after a failed put request inherited the stale
+  source file and failed with `FileDoesNotExist`.
 - Destination handler no longer panics when a metadata PDU's Message To User TLVs overflow its
   internal buffer. It now returns `DestError::MsgsToUserBufferTooSmall` instead, and the buffer
   was bumped from 1024 to 2048 bytes.
