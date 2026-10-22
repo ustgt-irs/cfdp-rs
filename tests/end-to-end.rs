@@ -1,4 +1,7 @@
-//! This is an end-to-end integration tests using the CFDP abstractions provided by the library.
+//! End-to-end integration test using the CFDP abstractions provided by the library.
+//!
+//! The test models two entities. Entity 1 only runs a source handler and entity 2 only runs a
+//! destination handler, so files can only be sent from entity 1 to entity 2.
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -22,7 +25,10 @@ use cfdp::{
     user::{CfdpUser, FileSegmentRecvdParams, MetadataReceivedParams, TransactionFinishedParams},
 };
 use spacepackets::{
-    cfdp::{ChecksumType, ConditionCode, TransmissionMode},
+    cfdp::{
+        ChecksumType, ConditionCode, TransmissionMode,
+        tlv::msg_to_user::{ProxyPutRequestMessageReader, ReservedMessageType},
+    },
     util::UnsignedByteFieldU16,
 };
 
@@ -95,6 +101,21 @@ impl CfdpUser for ExampleCfdpUser {
             "{:?} entity: Metadata received: {:?}",
             self.entity_type, md_recvd_params
         );
+        // A proxy put request would normally be converted to a put request and passed to the
+        // source handler of this entity. This test only models one half of each entity, so there
+        // is no source handler to pass it to, and the request is only printed.
+        for msg_to_user in md_recvd_params.msgs_to_user {
+            if let Some(Ok(ReservedMessageType::ProxyPutRequest)) =
+                msg_to_user.reserved_cfdp_msg_type()
+            {
+                let proxy_put_request = ProxyPutRequestMessageReader::try_from(*msg_to_user)
+                    .expect("reading proxy put request failed");
+                println!(
+                    "{:?} entity: Proxy put request received: {:?}",
+                    self.entity_type, proxy_put_request
+                );
+            }
+        }
     }
 
     fn file_segment_recvd_indication(&mut self, segment_recvd_params: &FileSegmentRecvdParams) {

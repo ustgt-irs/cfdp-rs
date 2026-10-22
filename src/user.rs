@@ -1,7 +1,5 @@
 //! # User support and hooks module
 #![deny(missing_docs)]
-#[cfg(feature = "alloc")]
-use spacepackets::cfdp::tlv::WritableTlv;
 use spacepackets::{
     cfdp::{
         ConditionCode,

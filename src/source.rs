@@ -62,7 +62,7 @@ use spacepackets::{
             nak::NakPduReader,
         },
     },
-    util::{UnsignedByteField, UnsignedEnum},
+    util::UnsignedByteField,
 };
 
 use spacepackets::seq_count::SequenceCounter;
@@ -1071,7 +1071,7 @@ impl<
             size,
         );
         let mut unwritten_pdu =
-            pdu_creator.write_to_bytes_partially(self.pdu_and_cksum_buffer.get_mut())?;
+            pdu_creator.write_to_slice_partially(self.pdu_and_cksum_buffer.get_mut())?;
         self.vfs.read_data(
             self.put_request_cacher.source_file().unwrap(),
             offset,
@@ -1112,7 +1112,7 @@ impl<
 
     fn pdu_send_helper(&self, pdu: &(impl WritablePduPacket + CfdpPdu)) -> Result<(), SourceError> {
         let mut pdu_buffer_mut = self.pdu_and_cksum_buffer.borrow_mut();
-        let written_len = pdu.write_to_bytes(pdu_buffer_mut.as_mut_slice())?;
+        let written_len = pdu.write_to_slice(pdu_buffer_mut.as_mut_slice())?;
         self.pdu_sender.send_pdu(
             pdu.pdu_type(),
             pdu.file_directive_type(),

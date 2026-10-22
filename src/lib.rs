@@ -1121,7 +1121,7 @@ pub(crate) mod tests {
                 metadata::{MetadataGenericParams, MetadataPduCreator},
             },
         },
-        util::{UnsignedByteField, UnsignedByteFieldU8, UnsignedByteFieldU16, UnsignedEnum},
+        util::{UnsignedByteField, UnsignedByteFieldU8, UnsignedByteFieldU16},
     };
     use user::{CfdpUser, OwnedMetadataRecvdParams, TransactionFinishedParams};
 
@@ -1574,7 +1574,7 @@ pub(crate) mod tests {
         let metadata_pdu =
             MetadataPduCreator::new_no_opts(pdu_header, metadata_params, src_lv, dest_lv);
         metadata_pdu
-            .write_to_bytes(&mut buf)
+            .write_to_slice(&mut buf)
             .expect("writing metadata PDU failed");
 
         let packet_info = PduRawWithInfo::new(&buf).expect("creating packet info failed");
@@ -1600,7 +1600,7 @@ pub(crate) mod tests {
         let pdu_header = generic_pdu_header();
         let file_data_pdu = FileDataPdu::new_no_seg_metadata(pdu_header, 0, &[]);
         file_data_pdu
-            .write_to_bytes(&mut buf)
+            .write_to_slice(&mut buf)
             .expect("writing file data PDU failed");
         let packet_info = PduRawWithInfo::new(&buf).expect("creating packet info failed");
         assert_eq!(
@@ -1621,7 +1621,7 @@ pub(crate) mod tests {
         let pdu_header = generic_pdu_header();
         let eof_pdu = EofPdu::new_no_error(pdu_header, 0, 0);
         eof_pdu
-            .write_to_bytes(&mut buf)
+            .write_to_slice(&mut buf)
             .expect("writing file data PDU failed");
         let packet_info = PduRawWithInfo::new(&buf).expect("creating packet info failed");
         assert_eq!(packet_info.pdu_type(), PduType::FileDirective);

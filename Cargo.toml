@@ -1,3 +1,10 @@
+[workspace]
+members = [".", "examples/cfdp-cli-udp", "examples/python-interop"]
+
+[workspace.dependencies]
+# spacepackets = { version = "0.18", default-features = false }
+spacepackets = { git = "https://github.com/us-irs/spacepackets-rs.git", rev = "fc5ed259f7cff5748799ec4965eec00bd25a2fc6", default-features = false }
+
 [package]
 name = "cfdp-rs"
 version = "0.3.0"
@@ -18,7 +25,7 @@ name = "cfdp"
 crc = "3"
 smallvec = "1"
 hashbrown = { version = "0.17", optional = true }
-spacepackets = { version = "0.18", default-features = false }
+spacepackets = { workspace = true }
 thiserror = { version = "2", default-features = false }
 heapless = "0.9"
 serde = { version = "1", optional = true }
@@ -53,10 +60,6 @@ packet-buf-4k = []
 [dev-dependencies]
 tempfile = "3"
 rand = "0.10"
-log = "0.4"
-fern = "0.7"
-chrono = "0.4"
-clap = { version = "4", features = ["derive"] }
 
 [package.metadata.docs.rs]
 features = ["serde", "defmt"]

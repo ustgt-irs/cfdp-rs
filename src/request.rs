@@ -6,7 +6,7 @@ use spacepackets::{
     ByteConversionError,
     cfdp::{
         SegmentationControl, TransmissionMode,
-        tlv::{GenericTlv, ReadableTlv as _, Tlv, TlvType, WritableTlv as _},
+        tlv::{GenericTlv, Tlv, TlvType},
     },
     util::UnsignedByteField,
 };
@@ -358,7 +358,7 @@ impl<const BUF_SIZE: usize> StaticPutRequestCacher<BUF_SIZE> {
         if let Some(dest_file) = put_request.dest_file() {
             if dest_file.len() > u8::MAX as usize {
                 return Err(ByteConversionError::ToSliceTooSmall {
-                    found: self.static_fields.source_file_buf.len(),
+                    found: self.static_fields.dest_file_buf.len(),
                     expected: dest_file.len(),
                 });
             }
@@ -378,7 +378,7 @@ impl<const BUF_SIZE: usize> StaticPutRequestCacher<BUF_SIZE> {
                 });
             }
             // We checked the buffer lengths, so this should never fail.
-            tlv.write_to_bytes(&mut self.opts_buf[current_idx..current_idx + tlv.len_full()])
+            tlv.write_to_slice(&mut self.opts_buf[current_idx..current_idx + tlv.len_full()])
                 .unwrap();
             current_idx += tlv.len_full();
             Ok(())
@@ -621,10 +621,7 @@ pub mod alloc_mod {
 mod tests {
     use std::string::String;
 
-    use spacepackets::{
-        cfdp::tlv::{ReadableTlv, msg_to_user::MsgToUserTlv},
-        util::UbfU16,
-    };
+    use spacepackets::{cfdp::tlv::msg_to_user::MsgToUserTlv, util::UbfU16};
 
     use super::*;
 

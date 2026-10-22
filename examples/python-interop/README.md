@@ -29,9 +29,9 @@ with fixed temporary paths.
 
 ## Running the Rust App
 
-You can run the Rust application using `cargo`, for example `cargo run --example python-interop`.
-It is recommended to run `cargo run --example python-interop -- -h` to get an overview of some
+You can run the Rust application using `cargo`, for example `cargo run -p python-interop`.
+It is recommended to run `cargo run -p python-interop -- -h` to get an overview of some
 possible launch options.
 
-Running the Rust App with `cargo run --example python-interop -- -f` will cause the Rust app to
+Running the Rust App with `cargo run -p python-interop -- -f` will cause the Rust app to
 start a file copy operation with fixed temporary paths.

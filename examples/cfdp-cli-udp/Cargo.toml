@@ -1,0 +1,15 @@
+[package]
+name = "cfdp-cli-udp"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cfdp-rs = { path = "../.." }
+spacepackets = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+log = "0.4"
+fern = "0.7"
+chrono = "0.4"
+thiserror = "2"
+ctrlc = "3.5"
