@@ -1270,6 +1270,7 @@ pub(crate) mod tests {
         pub finished_indic_queue: VecDeque<TransactionFinishedParams>,
         pub metadata_recv_queue: VecDeque<OwnedMetadataRecvdParams>,
         pub file_seg_recvd_queue: VecDeque<FileSegmentRecvdParamsNoSegMetadata>,
+        pub abandoned_indic_queue: VecDeque<FaultInfo>,
     }
 
     impl TestCfdpUser {
@@ -1292,6 +1293,7 @@ pub(crate) mod tests {
                 finished_indic_queue: VecDeque::new(),
                 metadata_recv_queue: VecDeque::new(),
                 file_seg_recvd_queue: VecDeque::new(),
+                abandoned_indic_queue: VecDeque::new(),
             }
         }
 
@@ -1304,6 +1306,7 @@ pub(crate) mod tests {
             self.finished_indic_queue.is_empty()
                 && self.metadata_recv_queue.is_empty()
                 && self.file_seg_recvd_queue.is_empty()
+                && self.abandoned_indic_queue.is_empty()
         }
 
         pub fn verify_finished_indication_retained(
@@ -1328,6 +1331,19 @@ pub(crate) mod tests {
             assert_eq!(finished_indication.condition_code, cond_code);
             assert_eq!(finished_indication.delivery_code, delivery_code);
             assert_eq!(finished_indication.file_status, file_status);
+        }
+
+        pub fn verify_abandoned_indication(
+            &mut self,
+            cond_code: ConditionCode,
+            id: TransactionId,
+            progress: u64,
+        ) {
+            assert_eq!(self.abandoned_indic_queue.len(), 1);
+            let abandoned_indication = self.abandoned_indic_queue.pop_front().unwrap();
+            assert_eq!(abandoned_indication.transaction_id, id);
+            assert_eq!(abandoned_indication.condition_code, cond_code);
+            assert_eq!(abandoned_indication.progress, progress);
         }
     }
 
@@ -1408,11 +1424,13 @@ pub(crate) mod tests {
 
         fn abandoned_indication(
             &mut self,
-            _id: &crate::TransactionId,
-            _condition_code: ConditionCode,
-            _progress: u64,
+            id: &crate::TransactionId,
+            condition_code: ConditionCode,
+            progress: u64,
         ) {
-            panic!("unexpected abandoned indication");
+            self.generic_id_check(id);
+            self.abandoned_indic_queue
+                .push_back(FaultInfo::new(*id, condition_code, progress));
         }
 
         fn eof_recvd_indication(&mut self, id: &crate::TransactionId) {
@@ -1426,10 +1444,12 @@ pub(crate) mod tests {
             if self.check_queues_empty_on_drop {
                 assert!(
                     self.indication_queues_empty(),
-                    "indication queues not empty on drop: finished: {}, metadata: {}, file seg: {}",
+                    "indication queues not empty on drop: finished: {}, metadata: {}, file seg: {}, \
+                    abandoned: {}",
                     self.finished_indic_queue.len(),
                     self.metadata_recv_queue.len(),
-                    self.file_seg_recvd_queue.len()
+                    self.file_seg_recvd_queue.len(),
+                    self.abandoned_indic_queue.len()
                 );
             }
         }

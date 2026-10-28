@@ -37,6 +37,7 @@ use crate::{
 };
 use core::{
     cell::{Cell, RefCell},
+    ops::ControlFlow,
     str::{Utf8Error, from_utf8, from_utf8_unchecked},
 };
 
@@ -106,6 +107,14 @@ impl AnomalyTracker {
     pub fn reset(&mut self) {
         *self = Default::default();
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+enum ChecksumVerification {
+    Valid,
+    Invalid,
+    /// The handler was reset, so the transaction state must not be used anymore.
+    Abandoned,
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -891,7 +900,7 @@ impl<
             if self.declare_fault(ConditionCode::FilestoreRejection)
                 == FaultHandlerCode::AbandonTransaction
             {
-                self.abandon_transaction();
+                self.abandon_transaction(user, ConditionCode::FilestoreRejection);
             }
             return Err(e.into());
         }
@@ -1021,14 +1030,14 @@ impl<
                     step: self.step(),
                 });
             }
-            return self.handle_eof_without_previous_metadata_in_acked_mode(&eof_pdu);
+            return self.handle_eof_without_previous_metadata_in_acked_mode(cfdp_user, &eof_pdu);
         }
         if eof_pdu.condition_code() == ConditionCode::NoError {
-            if !self.handle_eof_no_error(&eof_pdu)? {
+            if !self.handle_eof_no_error(cfdp_user, &eof_pdu)? {
                 return Ok(sent_packets);
             }
-        } else {
-            self.handle_eof_cancel(&eof_pdu);
+        } else if self.handle_eof_cancel(cfdp_user, &eof_pdu).is_break() {
+            return Ok(sent_packets);
         };
         let mut sent_packets = 0;
         match self.transaction_params.transmission_mode() {
@@ -1077,6 +1086,7 @@ impl<
 
     fn handle_eof_without_previous_metadata_in_acked_mode(
         &mut self,
+        cfdp_user: &mut impl CfdpUser,
         eof_pdu: &EofPdu,
     ) -> Result<u32, DestError> {
         let mut sent_packets = 0;
@@ -1095,8 +1105,10 @@ impl<
             self.lost_segment_tracker
                 .add_lost_segment((0, eof_pdu.file_size()))?;
         }
-        if eof_pdu.condition_code() != ConditionCode::NoError {
-            self.handle_eof_cancel(eof_pdu);
+        if eof_pdu.condition_code() != ConditionCode::NoError
+            && self.handle_eof_cancel(cfdp_user, eof_pdu).is_break()
+        {
+            return Ok(sent_packets);
         }
         self.acknowledge_eof_pdu(eof_pdu)?;
         sent_packets += 1;
@@ -1110,7 +1122,11 @@ impl<
         Ok(sent_packets)
     }
 
-    fn handle_eof_cancel(&mut self, eof_pdu: &EofPdu) {
+    fn handle_eof_cancel(
+        &mut self,
+        cfdp_user: &mut impl CfdpUser,
+        eof_pdu: &EofPdu,
+    ) -> ControlFlow<()> {
         // This is an EOF (Cancel), perform Cancel Response Procedures according to chapter
         // 4.6.6 of the standard. Set remote ID as fault location.
         self.trigger_notice_of_completion_cancelled(
@@ -1121,7 +1137,7 @@ impl<
         self.transaction_params.progress = eof_pdu.file_size();
         if let Some(ack_params) = &self.transaction_params.acked_params {
             if ack_params.metadata_missing {
-                return;
+                return ControlFlow::Continue(());
             }
         }
         if self.transaction_params.progress == 0 {
@@ -1130,19 +1146,22 @@ impl<
                 .finished_params
                 .delivery_code
                 .set(DeliveryCode::Complete);
-            return;
+            return ControlFlow::Continue(());
         }
-        if self.checksum_verify(self.transaction_params.progress, eof_pdu.file_checksum()) {
-            self.transaction_params
-                .finished_params
-                .delivery_code
-                .set(DeliveryCode::Complete);
-            return;
-        }
+        let delivery_code = match self.checksum_verify(
+            cfdp_user,
+            self.transaction_params.progress,
+            eof_pdu.file_checksum(),
+        ) {
+            ChecksumVerification::Valid => DeliveryCode::Complete,
+            ChecksumVerification::Invalid => DeliveryCode::Incomplete,
+            ChecksumVerification::Abandoned => return ControlFlow::Break(()),
+        };
         self.transaction_params
             .finished_params
             .delivery_code
-            .set(DeliveryCode::Incomplete);
+            .set(delivery_code);
+        ControlFlow::Continue(())
     }
 
     fn acknowledge_eof_pdu(&mut self, eof_pdu: &EofPdu) -> Result<(), DestError> {
@@ -1180,14 +1199,20 @@ impl<
         }
     }
 
-    fn check_for_deferred_lost_segment_completion(&mut self, metadata_missing: bool) -> bool {
+    fn check_for_deferred_lost_segment_completion(
+        &mut self,
+        cfdp_user: &mut impl CfdpUser,
+        metadata_missing: bool,
+    ) -> bool {
         if self.lost_segment_tracker.is_empty() && !metadata_missing {
             // We are done and have received everything.
             match self.checksum_verify(
+                cfdp_user,
                 self.transaction_params.progress,
                 self.transaction_params.checksum,
             ) {
-                true => {
+                ChecksumVerification::Abandoned => return true,
+                ChecksumVerification::Valid => {
                     self.transaction_params
                         .finished_params
                         .condition_code
@@ -1197,7 +1222,7 @@ impl<
                         .delivery_code
                         .set(DeliveryCode::Complete);
                 }
-                false => {
+                ChecksumVerification::Invalid => {
                     self.transaction_params
                         .finished_params
                         .condition_code
@@ -1219,13 +1244,17 @@ impl<
         false
     }
 
-    fn deferred_lost_segment_handling(&mut self) -> Result<u32, DestError> {
+    fn deferred_lost_segment_handling(
+        &mut self,
+        cfdp_user: &mut impl CfdpUser,
+    ) -> Result<u32, DestError> {
         assert!(
             self.transaction_params.acked_params.is_some(),
             "acknowledged parameters unexpectedly None"
         );
         let acked_params = self.transaction_params.acked_params.unwrap();
-        if self.check_for_deferred_lost_segment_completion(acked_params.metadata_missing) {
+        if self.check_for_deferred_lost_segment_completion(cfdp_user, acked_params.metadata_missing)
+        {
             return Ok(0);
         }
         let mut sent_packets = 0;
@@ -1267,7 +1296,7 @@ impl<
             if self.declare_fault(ConditionCode::NakLimitReached)
                 == FaultHandlerCode::AbandonTransaction
             {
-                self.abandon_transaction();
+                self.abandon_transaction(cfdp_user, ConditionCode::NakLimitReached);
             }
             return Ok(sent_packets);
         }
@@ -1455,13 +1484,17 @@ impl<
     }
 
     /// Returns whether the transfer can be completed regularly.
-    fn handle_eof_no_error(&mut self, eof_pdu: &EofPdu) -> Result<bool, DestError> {
+    fn handle_eof_no_error(
+        &mut self,
+        cfdp_user: &mut impl CfdpUser,
+        eof_pdu: &EofPdu,
+    ) -> Result<bool, DestError> {
         // CFDP 4.6.1.2.9: Declare file size error if progress exceeds file size
         if self.transaction_params.progress > eof_pdu.file_size() {
             match self.declare_fault(ConditionCode::FileSizeError) {
                 FaultHandlerCode::IgnoreError => (),
                 FaultHandlerCode::AbandonTransaction => {
-                    self.abandon_transaction();
+                    self.abandon_transaction(cfdp_user, ConditionCode::FileSizeError);
                     return Ok(false);
                 }
                 FaultHandlerCode::NoticeOfCancellation | FaultHandlerCode::NoticeOfSuspension => {
@@ -1480,14 +1513,19 @@ impl<
 
         self.transaction_params.file_size = eof_pdu.file_size();
         self.transaction_params.checksum = eof_pdu.file_checksum();
-        if self.transaction_params.transmission_mode() == TransmissionMode::Unacknowledged
-            && !self.checksum_verify(
+        if self.transaction_params.transmission_mode() == TransmissionMode::Unacknowledged {
+            match self.checksum_verify(
+                cfdp_user,
                 self.transaction_params.progress,
                 self.transaction_params.checksum,
-            )
-        {
-            self.start_check_limit_handling();
-            return Ok(false);
+            ) {
+                ChecksumVerification::Valid => (),
+                ChecksumVerification::Invalid => {
+                    self.start_check_limit_handling();
+                    return Ok(false);
+                }
+                ChecksumVerification::Abandoned => return Ok(false),
+            }
         }
         self.transaction_params
             .finished_params
@@ -1500,13 +1538,18 @@ impl<
         Ok(true)
     }
 
-    fn checksum_verify(&mut self, verify_len: u64, checksum: u32) -> bool {
+    fn checksum_verify(
+        &mut self,
+        cfdp_user: &mut impl CfdpUser,
+        verify_len: u64,
+        checksum: u32,
+    ) -> ChecksumVerification {
         if self.transaction_params.metadata_params().checksum_type == ChecksumType::NullChecksum
             || self.transaction_params.metadata_only
         {
-            return true;
+            return ChecksumVerification::Valid;
         }
-        match self.vfs.checksum_verify(
+        let (condition_code, verification) = match self.vfs.checksum_verify(
             checksum,
             // Safety: It was already verified that the path is valid during the transaction start.
             #[allow(unsafe_code)]
@@ -1520,37 +1563,28 @@ impl<
             verify_len,
             self.pdu_and_cksum_buffer.get_mut(),
         ) {
-            Ok(false) => {
-                if self.declare_fault(ConditionCode::FileChecksumFailure)
-                    == FaultHandlerCode::AbandonTransaction
-                {
-                    self.abandon_transaction();
-                }
-                false
-            }
-            Ok(true) => true,
-            Err(e) => match e {
-                FilestoreError::ChecksumTypeNotImplemented(_) => {
-                    if self.declare_fault(ConditionCode::UnsupportedChecksumType)
-                        == FaultHandlerCode::AbandonTransaction
-                    {
-                        self.abandon_transaction();
-                    }
-                    // For this case, the applicable algorithm shall be the the null checksum,
-                    // which is always succesful.
-                    true
-                }
-                _ => {
-                    if self.declare_fault(ConditionCode::FilestoreRejection)
-                        == FaultHandlerCode::AbandonTransaction
-                    {
-                        self.abandon_transaction();
-                    }
-                    // Treat this equivalent to a failed checksum procedure.
-                    false
-                }
-            },
+            Ok(true) => return ChecksumVerification::Valid,
+            Ok(false) => (
+                ConditionCode::FileChecksumFailure,
+                ChecksumVerification::Invalid,
+            ),
+            // For this case, the applicable algorithm shall be the the null checksum, which is
+            // always succesful.
+            Err(FilestoreError::ChecksumTypeNotImplemented(_)) => (
+                ConditionCode::UnsupportedChecksumType,
+                ChecksumVerification::Valid,
+            ),
+            // Treat this equivalent to a failed checksum procedure.
+            Err(_) => (
+                ConditionCode::FilestoreRejection,
+                ChecksumVerification::Invalid,
+            ),
+        };
+        if self.declare_fault(condition_code) == FaultHandlerCode::AbandonTransaction {
+            self.abandon_transaction(cfdp_user, condition_code);
+            return ChecksumVerification::Abandoned;
         }
+        verification
     }
 
     fn start_check_limit_handling(&mut self) {
@@ -1566,7 +1600,7 @@ impl<
         self.transaction_params.current_check_count = 0;
     }
 
-    fn check_limit_handling(&mut self) -> Result<(), DestError> {
+    fn check_limit_handling(&mut self, cfdp_user: &mut impl CfdpUser) -> Result<(), DestError> {
         if self.transaction_params.current_check_timer.is_none() {
             return Ok(());
         }
@@ -1576,20 +1610,25 @@ impl<
             .as_ref()
             .unwrap();
         if check_timer.has_expired() {
-            if self.checksum_verify(
+            match self.checksum_verify(
+                cfdp_user,
                 self.transaction_params.progress,
                 self.transaction_params.checksum,
             ) {
-                self.transaction_params
-                    .finished_params
-                    .condition_code
-                    .set(ConditionCode::NoError);
-                self.transaction_params
-                    .finished_params
-                    .delivery_code
-                    .set(DeliveryCode::Complete);
-                self.set_step(TransactionStep::TransferCompletion);
-                return Ok(());
+                ChecksumVerification::Valid => {
+                    self.transaction_params
+                        .finished_params
+                        .condition_code
+                        .set(ConditionCode::NoError);
+                    self.transaction_params
+                        .finished_params
+                        .delivery_code
+                        .set(DeliveryCode::Complete);
+                    self.set_step(TransactionStep::TransferCompletion);
+                    return Ok(());
+                }
+                ChecksumVerification::Invalid => (),
+                ChecksumVerification::Abandoned => return Ok(()),
             }
             if self.transaction_params.current_check_count + 1
                 >= self.transaction_params.remote_cfg.unwrap().check_limit
@@ -1597,7 +1636,7 @@ impl<
                 if self.declare_fault(ConditionCode::CheckLimitReached)
                     == FaultHandlerCode::AbandonTransaction
                 {
-                    self.abandon_transaction();
+                    self.abandon_transaction(cfdp_user, ConditionCode::CheckLimitReached);
                 }
             } else {
                 self.transaction_params.current_check_count += 1;
@@ -1632,18 +1671,18 @@ impl<
         {
             if let Some(ack_params) = &mut self.transaction_params.acked_params {
                 if ack_params.deferred_procedure_active {
-                    sent_packets += self.deferred_lost_segment_handling()?;
+                    sent_packets += self.deferred_lost_segment_handling(cfdp_user)?;
                 }
             }
         }
         if self.step() == TransactionStep::ReceivingFileDataPdusWithCheckLimitHandling {
-            self.check_limit_handling()?;
+            self.check_limit_handling(cfdp_user)?;
         }
         if self.step() == TransactionStep::TransferCompletion {
             sent_packets += self.transfer_completion(cfdp_user)?;
         }
         if self.step() == TransactionStep::WaitingForFinishedAck {
-            sent_packets += self.handle_positive_ack_procedures()?;
+            sent_packets += self.handle_positive_ack_procedures(cfdp_user)?;
             // Little hack because of the state machine handling order to ensure the transfer
             // is completed in one go.
             if self.step() == TransactionStep::TransferCompletion {
@@ -1774,7 +1813,10 @@ impl<
         );
     }
 
-    fn handle_positive_ack_procedures(&mut self) -> Result<u32, DestError> {
+    fn handle_positive_ack_procedures(
+        &mut self,
+        cfdp_user: &mut impl CfdpUser,
+    ) -> Result<u32, DestError> {
         // Do we have positive-ack params?
         if self.transaction_params.positive_ack_params.is_none() {
             return Ok(0);
@@ -1803,7 +1845,7 @@ impl<
             if self.declare_fault(ConditionCode::PositiveAckLimitReached)
                 == FaultHandlerCode::AbandonTransaction
             {
-                self.abandon_transaction();
+                self.abandon_transaction(cfdp_user, ConditionCode::PositiveAckLimitReached);
                 return Ok(0);
             }
             self.transaction_params
@@ -1909,7 +1951,16 @@ impl<
         // TODO: Implement suspension handling.
     }
 
-    fn abandon_transaction(&mut self) {
+    fn abandon_transaction(
+        &mut self,
+        cfdp_user: &mut impl CfdpUser,
+        condition_code: ConditionCode,
+    ) {
+        cfdp_user.abandoned_indication(
+            &self.transaction_id().unwrap(),
+            condition_code,
+            self.transaction_params.progress,
+        );
         self.reset();
     }
 
@@ -2316,6 +2367,34 @@ mod tests {
         fn state_check(&self, state: State, step: TransactionStep) {
             assert_eq!(self.handler.state(), state);
             assert_eq!(self.handler.step(), step);
+        }
+
+        fn set_fault_handler(&mut self, condition_code: ConditionCode, code: FaultHandlerCode) {
+            self.handler
+                .local_cfg
+                .fault_handler
+                .set_fault_handler(condition_code, code);
+        }
+
+        fn check_abandonment(
+            &mut self,
+            user: &mut TestCfdpUser,
+            condition_code: ConditionCode,
+            id: TransactionId,
+            progress: u64,
+        ) {
+            self.state_check(State::Idle, TransactionStep::Idle);
+            {
+                let mut fault_hook = self.fault_handler().user_hook.borrow_mut();
+                assert_eq!(fault_hook.abandoned_queue.len(), 1);
+                let abandoned = fault_hook.abandoned_queue.pop_front().unwrap();
+                assert_eq!(abandoned.transaction_id(), id);
+                assert_eq!(abandoned.condition_code(), condition_code);
+                assert_eq!(abandoned.progress(), progress);
+            }
+            user.verify_abandoned_indication(condition_code, id, progress);
+            assert!(user.indication_queues_empty());
+            self.check_dest_file = false;
         }
     }
 
@@ -4195,6 +4274,280 @@ mod tests {
             );
             assert_eq!(cancellation.progress(), 0);
         }
+        user.verify_abandoned_indication(
+            ConditionCode::PositiveAckLimitReached,
+            transfer_info.id,
+            0,
+        );
+    }
+
+    #[test]
+    fn test_file_data_filestore_rejection_abandonment() {
+        let file_data = "Hello World!".as_bytes();
+        let file_size = file_data.len() as u64;
+        let mut tb = DestHandlerTestbench::new_with_fixed_paths(
+            TestFaultHandler::default(),
+            TransmissionMode::Unacknowledged,
+            false,
+        );
+        tb.set_fault_handler(
+            ConditionCode::FilestoreRejection,
+            FaultHandlerCode::AbandonTransaction,
+        );
+        let mut user = tb.test_user_from_cached_paths(file_size);
+        let transfer_info = tb
+            .generic_transfer_init(&mut user, file_size)
+            .expect("transfer init failed");
+        // Writing the file data fails because the destination file is gone.
+        fs::remove_file(tb.dest_path()).expect("removing destination file failed");
+        assert!(
+            tb.generic_file_data_insert(&mut user, 0, file_data)
+                .is_err()
+        );
+        tb.check_abandonment(
+            &mut user,
+            ConditionCode::FilestoreRejection,
+            transfer_info.id,
+            0,
+        );
+    }
+
+    #[test]
+    fn test_file_size_error_abandonment() {
+        let file_data = "Hello World!".as_bytes();
+        let file_size = file_data.len() as u64;
+        let mut tb = DestHandlerTestbench::new_with_fixed_paths(
+            TestFaultHandler::default(),
+            TransmissionMode::Unacknowledged,
+            false,
+        );
+        tb.set_fault_handler(
+            ConditionCode::FileSizeError,
+            FaultHandlerCode::AbandonTransaction,
+        );
+        let mut user = tb.test_user_from_cached_paths(file_size);
+        let transfer_info = tb
+            .generic_transfer_init(&mut user, file_size)
+            .expect("transfer init failed");
+        tb.generic_file_data_insert(&mut user, 0, file_data)
+            .expect("file data insertion failed");
+        // The EOF file size is smaller than the received file data.
+        let eof_pdu = create_no_error_eof(&file_data[0..4], &transfer_info.header);
+        let packet_info = create_packet_info(&eof_pdu, &mut tb.buf);
+        assert_eq!(
+            tb.handler
+                .state_machine(&mut user, Some(&packet_info))
+                .expect("EOF insertion failed"),
+            0
+        );
+        tb.check_abandonment(
+            &mut user,
+            ConditionCode::FileSizeError,
+            transfer_info.id,
+            file_size,
+        );
+        fs::remove_file(tb.dest_path()).expect("removing destination file failed");
+    }
+
+    #[test]
+    fn test_checksum_failure_abandonment() {
+        let file_data = "Hello World!".as_bytes();
+        let file_size = file_data.len() as u64;
+        let mut tb = DestHandlerTestbench::new_with_fixed_paths(
+            TestFaultHandler::default(),
+            TransmissionMode::Unacknowledged,
+            false,
+        );
+        tb.set_fault_handler(
+            ConditionCode::FileChecksumFailure,
+            FaultHandlerCode::AbandonTransaction,
+        );
+        let mut user = tb.test_user_from_cached_paths(file_size);
+        let transfer_info = tb
+            .generic_transfer_init(&mut user, file_size)
+            .expect("transfer init failed");
+        // Only part of the file arrives, so the checksum check fails on EOF reception.
+        tb.generic_file_data_insert(&mut user, 0, &file_data[0..4])
+            .expect("file data insertion failed");
+        tb.generic_eof_no_error(&mut user, file_data.to_vec())
+            .expect("EOF insertion failed");
+        tb.check_abandonment(
+            &mut user,
+            ConditionCode::FileChecksumFailure,
+            transfer_info.id,
+            4,
+        );
+        fs::remove_file(tb.dest_path()).expect("removing destination file failed");
+    }
+
+    #[test]
+    fn test_unsupported_checksum_type_abandonment() {
+        let file_data = "Hello World!".as_bytes();
+        let file_size = file_data.len() as u64;
+        let mut tb = DestHandlerTestbench::new_with_fixed_paths(
+            TestFaultHandler::default(),
+            TransmissionMode::Unacknowledged,
+            false,
+        );
+        tb.set_fault_handler(
+            ConditionCode::UnsupportedChecksumType,
+            FaultHandlerCode::AbandonTransaction,
+        );
+        let mut user = tb.test_user_from_cached_paths(file_size);
+        // The native filestore does not implement this checksum type.
+        let pdu_header = PduHeader::new_for_file_directive(tb.pdu_conf, 0);
+        let metadata_pdu = MetadataPduCreator::new_no_opts(
+            pdu_header,
+            MetadataGenericParams::new(false, ChecksumType::Crc32Proximity1, file_size),
+            Lv::new_from_str(tb.src_path.to_str().unwrap()).unwrap(),
+            Lv::new_from_str(tb.dest_path.to_str().unwrap()).unwrap(),
+        );
+        let packet_info = create_packet_info(&metadata_pdu, &mut tb.buf);
+        tb.handler
+            .state_machine(&mut user, Some(&packet_info))
+            .expect("metadata insertion failed");
+        assert_eq!(user.metadata_recv_queue.len(), 1);
+        user.metadata_recv_queue.pop_front();
+        let id = tb.handler.transaction_id().unwrap();
+        tb.generic_file_data_insert(&mut user, 0, file_data)
+            .expect("file data insertion failed");
+        tb.generic_eof_no_error(&mut user, file_data.to_vec())
+            .expect("EOF insertion failed");
+        tb.check_abandonment(
+            &mut user,
+            ConditionCode::UnsupportedChecksumType,
+            id,
+            file_size,
+        );
+        fs::remove_file(tb.dest_path()).expect("removing destination file failed");
+    }
+
+    #[test]
+    fn test_checksum_filestore_rejection_abandonment() {
+        let file_data = "Hello World!".as_bytes();
+        let file_size = file_data.len() as u64;
+        let mut tb = DestHandlerTestbench::new_with_fixed_paths(
+            TestFaultHandler::default(),
+            TransmissionMode::Unacknowledged,
+            false,
+        );
+        tb.set_fault_handler(
+            ConditionCode::FilestoreRejection,
+            FaultHandlerCode::AbandonTransaction,
+        );
+        let mut user = tb.test_user_from_cached_paths(file_size);
+        let transfer_info = tb
+            .generic_transfer_init(&mut user, file_size)
+            .expect("transfer init failed");
+        tb.generic_file_data_insert(&mut user, 0, file_data)
+            .expect("file data insertion failed");
+        // The checksum can not be calculated because the destination file is gone.
+        fs::remove_file(tb.dest_path()).expect("removing destination file failed");
+        tb.generic_eof_no_error(&mut user, file_data.to_vec())
+            .expect("EOF insertion failed");
+        tb.check_abandonment(
+            &mut user,
+            ConditionCode::FilestoreRejection,
+            transfer_info.id,
+            file_size,
+        );
+    }
+
+    #[test]
+    fn test_check_limit_reached_abandonment() {
+        let file_data = "Hello World!".as_bytes();
+        let file_size = file_data.len() as u64;
+        let mut tb = DestHandlerTestbench::new_with_fixed_paths(
+            TestFaultHandler::default(),
+            TransmissionMode::Unacknowledged,
+            false,
+        );
+        tb.set_fault_handler(
+            ConditionCode::CheckLimitReached,
+            FaultHandlerCode::AbandonTransaction,
+        );
+        let mut user = tb.test_user_from_cached_paths(file_size);
+        let transfer_info = tb
+            .generic_transfer_init(&mut user, file_size)
+            .expect("transfer init failed");
+        tb.generic_file_data_insert(&mut user, 0, &file_data[0..4])
+            .expect("file data insertion failed");
+        tb.generic_eof_no_error(&mut user, file_data.to_vec())
+            .expect("EOF insertion failed");
+        tb.state_check(
+            State::Busy,
+            TransactionStep::ReceivingFileDataPdusWithCheckLimitHandling,
+        );
+        for _ in 0..2 {
+            tb.set_check_timer_expired();
+            tb.handler
+                .state_machine_no_packet(&mut user)
+                .expect("fsm error");
+        }
+        {
+            // Each checksum check is ignored by default.
+            let mut fault_hook = tb.fault_handler().user_hook.borrow_mut();
+            assert_eq!(fault_hook.ignored_queue.len(), 3);
+            fault_hook.ignored_queue.clear();
+        }
+        tb.check_abandonment(
+            &mut user,
+            ConditionCode::CheckLimitReached,
+            transfer_info.id,
+            4,
+        );
+        fs::remove_file(tb.dest_path()).expect("removing destination file failed");
+    }
+
+    #[test]
+    fn test_nak_limit_reached_abandonment() {
+        let file_data = "Hello World!".as_bytes();
+        let file_size = file_data.len() as u64;
+        let mut tb = DestHandlerTestbench::new_with_fixed_paths(
+            TestFaultHandler::default(),
+            TransmissionMode::Acknowledged,
+            false,
+        );
+        tb.set_fault_handler(
+            ConditionCode::NakLimitReached,
+            FaultHandlerCode::AbandonTransaction,
+        );
+        // Disable this, we only want to check the deferred procedure.
+        tb.remote_cfg_mut().immediate_nak_mode = false;
+        let mut user = tb.test_user_from_cached_paths(file_size);
+        let transfer_info = tb
+            .generic_transfer_init(&mut user, file_size)
+            .expect("transfer init failed");
+        tb.generic_file_data_insert(&mut user, 4, &file_data[4..])
+            .expect("file data insertion failed");
+        assert_eq!(
+            tb.generic_eof_no_error(&mut user, file_data.to_vec())
+                .expect("EOF insertion failed"),
+            2
+        );
+        tb.check_eof_ack_pdu(ConditionCode::NoError);
+        assert_eq!(
+            tb.get_next_pdu().unwrap().file_directive_type,
+            Some(FileDirectiveType::Nak)
+        );
+
+        tb.set_nak_activity_timer_expired();
+        assert_eq!(tb.handler.state_machine_no_packet(&mut user).unwrap(), 1);
+        assert_eq!(
+            tb.get_next_pdu().unwrap().file_directive_type,
+            Some(FileDirectiveType::Nak)
+        );
+
+        // NAK limit reached, no Finished PDU is sent for an abandoned transaction.
+        tb.set_nak_activity_timer_expired();
+        assert_eq!(tb.handler.state_machine_no_packet(&mut user).unwrap(), 0);
+        tb.check_abandonment(
+            &mut user,
+            ConditionCode::NakLimitReached,
+            transfer_info.id,
+            file_size,
+        );
+        fs::remove_file(tb.dest_path()).expect("removing destination file failed");
     }
 
     #[test]
