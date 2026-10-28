@@ -996,23 +996,31 @@ impl<
     }
 
     fn notice_of_completion(&mut self, cfdp_user: &mut impl CfdpUser) {
+        // No finished parameters are available for unacknowledged file copy operations with
+        // no closure.
+        let finished_params = self
+            .transaction_params
+            .finished_params
+            .unwrap_or(FinishedParams {
+                condition_code: ConditionCode::NoError,
+                delivery_code: DeliveryCode::Complete,
+                file_status: FileStatus::Unreported,
+            });
+        self.transaction_finished_indication(cfdp_user, &finished_params);
+    }
+
+    fn transaction_finished_indication(
+        &self,
+        cfdp_user: &mut impl CfdpUser,
+        finished_params: &FinishedParams,
+    ) {
         if self.local_cfg.indication_cfg.transaction_finished {
-            // The first case happens for unacknowledged file copy operation with no closure.
-            let finished_params = match self.transaction_params.finished_params {
-                Some(finished_params) => TransactionFinishedParams {
-                    id: self.transaction_id().unwrap(),
-                    condition_code: finished_params.condition_code,
-                    delivery_code: finished_params.delivery_code,
-                    file_status: finished_params.file_status,
-                },
-                None => TransactionFinishedParams {
-                    id: self.transaction_id().unwrap(),
-                    condition_code: ConditionCode::NoError,
-                    delivery_code: DeliveryCode::Complete,
-                    file_status: FileStatus::Unreported,
-                },
-            };
-            cfdp_user.transaction_finished_indication(&finished_params);
+            cfdp_user.transaction_finished_indication(&TransactionFinishedParams {
+                id: self.transaction_id().unwrap(),
+                condition_code: finished_params.condition_code,
+                delivery_code: finished_params.delivery_code,
+                file_status: finished_params.file_status,
+            });
         }
     }
 
@@ -1206,7 +1214,16 @@ impl<
         self.prepare_and_send_eof_pdu(user, checksum)?;
         *sent_packets += 1;
         if self.transmission_mode().unwrap() == TransmissionMode::Unacknowledged {
-            // We are done.
+            // Notice of Completion (Canceled). The source entity can not know how much of the
+            // file was received, so the delivery is reported as incomplete.
+            self.transaction_finished_indication(
+                user,
+                &FinishedParams {
+                    condition_code,
+                    delivery_code: DeliveryCode::Incomplete,
+                    file_status: FileStatus::Unreported,
+                },
+            );
             Ok(FsmContext::ResetWhenPossible)
         } else {
             self.start_positive_ack_procedure(true);
@@ -2034,6 +2051,12 @@ mod tests {
         assert_eq!(condition_code, ConditionCode::CheckLimitReached);
         assert_eq!(progress, 0);
         fh_ref_mut.all_queues_empty();
+        user.verify_finished_indication(
+            DeliveryCode::Incomplete,
+            ConditionCode::CheckLimitReached,
+            expected_id,
+            FileStatus::Unreported,
+        );
     }
 
     #[test]
@@ -2076,6 +2099,12 @@ mod tests {
         assert_eq!(eof_pdu.file_checksum(), 0);
         assert_eq!(eof_pdu.file_size(), 0);
         tb.common_pdu_check_for_file_transfer(eof_pdu.pdu_header(), CrcFlag::NoCrc);
+        user.verify_finished_indication(
+            DeliveryCode::Incomplete,
+            ConditionCode::CancelRequestReceived,
+            id,
+            FileStatus::Unreported,
+        );
     }
 
     #[test]
@@ -2139,6 +2168,12 @@ mod tests {
         assert_eq!(
             eof_pdu.condition_code(),
             ConditionCode::CancelRequestReceived
+        );
+        user.verify_finished_indication(
+            DeliveryCode::Incomplete,
+            ConditionCode::CancelRequestReceived,
+            expected_id,
+            FileStatus::Unreported,
         );
     }
 
