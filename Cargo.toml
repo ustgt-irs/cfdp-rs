@@ -2,15 +2,13 @@
 members = [".", "examples/cfdp-cli-udp", "examples/python-interop"]
 
 [workspace.dependencies]
-# spacepackets = { version = "0.18", default-features = false }
-spacepackets = { git = "https://github.com/us-irs/spacepackets-rs.git", rev = "fc5ed259f7cff5748799ec4965eec00bd25a2fc6", default-features = false }
+spacepackets = { version = "0.19", default-features = false }
 
 [package]
 name = "cfdp-rs"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.87"
-authors = ["Robin Mueller <muellerr@irs.uni-stuttgart.de>"]
+rust-version = "1.88"
 description = "High level CCSDS File Delivery Protocol components"
 repository = "https://github.com/ustgt-irs/cfdp-rs"
 license = "Apache-2.0"

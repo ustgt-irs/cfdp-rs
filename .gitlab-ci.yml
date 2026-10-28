@@ -33,7 +33,7 @@ test:
     - just test
 
 msrv:
-  image: rust:1.87
+  image: rust:1.88
   script:
     - cargo check --release
 
