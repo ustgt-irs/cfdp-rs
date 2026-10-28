@@ -12,9 +12,12 @@ check-fmt:
 check:
   cargo check --workspace --features "serde, defmt"
 
+check-features:
+  cargo hack check --feature-powerset
+
 # Uses the MSRV from Cargo.toml.
 msrv:
-  cargo hack check --rust-version --release
+  cargo hack check --rust-version --feature-powerset
 
 test:
   cargo nextest r --workspace --features "serde, defmt"
