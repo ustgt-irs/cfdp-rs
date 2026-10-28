@@ -10,9 +10,24 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Bumped `spacepackets` to v0.18
 
+## Removed
+
+- `SourceHandler::abandon_transaction`. It only called `reset`. Use `cancel_request` to stop a
+  transaction cleanly. Abandonment is only triggered by the fault handler.
+
 ## Fixed
 
-- Properly emit a finished indication if the transfer is cancelled for NAKed mode
+- Source handler now emits a Transaction-Finished indication when a transaction is cancelled in
+  unacknowledged mode. It reports the condition code of the cancellation, `DeliveryCode::Incomplete`
+  and `FileStatus::Unreported`.
+- Source handler now abandons the transaction when the positive ACK limit is reached for the
+  EOF (cancel) PDU after a `cancel_request` in acknowledged mode, as required by CFDP 4.11.2.2.3.
+  It used to run the regular fault handler, which started a second notice of cancellation.
+- Source and destination handler now call `CfdpUser::abandoned_indication` when a transaction is
+  abandoned. Only `UserFaultHook::abandoned_cb` was called before.
+- Destination handler no longer keeps processing a transaction which was abandoned during the
+  checksum verification. A checksum failure or filestore rejection caused a panic, and an
+  unsupported checksum type continued with the already reset transaction.
 - Destination handler's `TransactionParams::reset` now resets all fields instead of just two.
   The incomplete reset left stale acknowledged-mode state behind, so a new transaction's Metadata
   PDU was mistaken for a duplicate of an already-processed one and silently dropped, breaking
