@@ -12,6 +12,10 @@ check-fmt:
 check:
   cargo check --workspace --features "serde, defmt"
 
+# Uses the MSRV from Cargo.toml.
+msrv:
+  cargo hack check --rust-version --release
+
 test:
   cargo nextest r --workspace --features "serde, defmt"
   cargo test --doc
