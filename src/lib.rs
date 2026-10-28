@@ -59,15 +59,17 @@
 //!
 //! ## Buffer size selection
 //!
-//! The following features can be used to select the internal buffer size used for PDU generation
-//! and checksum calculation. Selection of this value possibly limits the size of the generated PDU
-//! packets. Only one feature may be enabled.
+//! The `CFDP_PACKET_BUF_LEN` environment variable sets the internal buffer size in bytes which is
+//! used for PDU generation and checksum calculation. This value possibly limits the size of the
+//! generated PDU packets. The default is 2048 bytes.
 //!
-//! - `packet-buf-256` for 256 bytes
-//! - `packet-buf-512` for 512 bytes
-//! - `packet-buf-1k` for 1024 bytes
-//! - `packet-buf-2k` for 2048 bytes. This is the default.
-//! - `packet-buf-4k` for 4096 bytes
+//! The variable is read at build time. It can be set in the `.cargo/config.toml` of the
+//! application:
+//!
+//! ```toml
+//! [env]
+//! CFDP_PACKET_BUF_LEN = "1024"
+//! ```
 //!
 //! # Examples
 //!

@@ -30,7 +30,7 @@ serde = { version = "1", optional = true }
 defmt  = { version = "1", optional = true }
 
 [features]
-default = ["std", "packet-buf-2k"]
+default = ["std"]
 std = [
     "alloc",
     "thiserror/std",
@@ -42,18 +42,6 @@ alloc = [
 ]
 serde = ["dep:serde", "spacepackets/serde", "hashbrown/serde", "heapless/serde"]
 defmt = ["dep:defmt", "spacepackets/defmt"]
-
-# Available packet buffer sizes. Only one should be enabled.
-# 256 bytes
-packet-buf-256 = []
-# 512 bytes
-packet-buf-512 = []
-# 1024 bytes
-packet-buf-1k = []
-# 2048 bytes
-packet-buf-2k = []
-# 4096 bytes
-packet-buf-4k = []
 
 [dev-dependencies]
 tempfile = "3"

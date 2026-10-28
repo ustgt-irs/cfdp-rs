@@ -54,7 +54,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
-      - run: cargo check --release --target=${{matrix.target}} --no-default-features --features "packet-buf-1k, defmt"
+      - run: cargo check --release --target=${{matrix.target}} --no-default-features --features defmt
+        env:
+          CFDP_PACKET_BUF_LEN: 1024
 
   fmt:
     name: Check formatting
