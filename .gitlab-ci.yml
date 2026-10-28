@@ -16,7 +16,9 @@ default:
 
 check:
   script:
+    - curl -LsSf https://github.com/taiki-e/cargo-hack/releases/latest/download/cargo-hack-x86_64-unknown-linux-gnu.tar.gz | tar zxf - -C /usr/local/cargo/bin
     - just check
+    - just check-features
 
 build:
   script:
