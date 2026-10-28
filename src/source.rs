@@ -1242,13 +1242,6 @@ impl<
         // TODO: Implement.
     }
 
-    /// Manually abandon the currently active transaction.
-    pub fn abandon_transaction(&mut self) {
-        // I guess an abandoned transaction just stops whatever the handler is doing and resets
-        // it to a clean state.. The implementation for this is quite easy.
-        self.reset();
-    }
-
     // Returns the number of packets sent and a FSM context structure.
     fn declare_fault(
         &self,
@@ -1274,6 +1267,11 @@ impl<
             }
             FaultHandlerCode::IgnoreError => (),
             FaultHandlerCode::AbandonTransaction => {
+                user.abandoned_indication(
+                    &self.transaction_id().unwrap(),
+                    cond,
+                    self.transaction_params.file_params.progress,
+                );
                 ctx = FsmContext::ResetWhenPossible;
             }
         }
@@ -2352,6 +2350,11 @@ mod tests {
         assert_eq!(condition_code, ConditionCode::PositiveAckLimitReached);
         assert_eq!(progress, file_size);
         fh_ref_mut.all_queues_empty();
+        user.verify_abandoned_indication(
+            ConditionCode::PositiveAckLimitReached,
+            transfer_info.id,
+            file_size,
+        );
     }
 
     #[test]
@@ -2412,6 +2415,11 @@ mod tests {
         assert_eq!(condition_code, ConditionCode::PositiveAckLimitReached);
         assert_eq!(progress, file_size);
         assert!(fh_ref_mut.all_queues_empty());
+        user.verify_abandoned_indication(
+            ConditionCode::PositiveAckLimitReached,
+            transfer_info.id,
+            file_size,
+        );
     }
 
     #[test]
