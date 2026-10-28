@@ -10,10 +10,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 - Bumped `spacepackets` to v0.18
 
+## Changed
+
+- The internal buffer size is now set with the `CFDP_PACKET_BUF_LEN` environment variable at
+  build time instead of the `packet-buf-*` features. The default stays at 2048 bytes. This keeps
+  all features additive.
+
 ## Removed
 
 - `SourceHandler::abandon_transaction`. It only called `reset`. Use `cancel_request` to stop a
   transaction cleanly. Abandonment is only triggered by the fault handler.
+- `packet-buf-256`, `packet-buf-512`, `packet-buf-1k`, `packet-buf-2k` and `packet-buf-4k`
+  features. Use the `CFDP_PACKET_BUF_LEN` environment variable instead.
 
 ## Fixed
 
