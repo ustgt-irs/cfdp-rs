@@ -863,28 +863,19 @@ impl<
                 self.set_step(TransactionStep::NoticeOfCompletion);
             }
         } else {
-            self.start_positive_ack_procedure();
+            self.start_positive_ack_procedure(false);
         }
         Ok(())
     }
 
-    fn start_positive_ack_procedure(&self) {
+    fn start_positive_ack_procedure(&self, of_cancellation: bool) {
         self.set_step_internal(TransactionStep::WaitingForEofAck);
-        match self.transaction_params.positive_ack_params.get() {
-            Some(mut current) => {
-                current.ack_counter = 0;
-                self.transaction_params
-                    .positive_ack_params
-                    .set(Some(current));
-            }
-            None => self
-                .transaction_params
-                .positive_ack_params
-                .set(Some(PositiveAckParams {
-                    ack_counter: 0,
-                    positive_ack_of_cancellation: false,
-                })),
-        }
+        self.transaction_params
+            .positive_ack_params
+            .set(Some(PositiveAckParams {
+                ack_counter: 0,
+                positive_ack_of_cancellation: of_cancellation,
+            }));
 
         *self.transaction_params.ack_timer.borrow_mut() = Some(
             self.timer_creator
@@ -1218,7 +1209,7 @@ impl<
             // We are done.
             Ok(FsmContext::ResetWhenPossible)
         } else {
-            self.start_positive_ack_procedure();
+            self.start_positive_ack_procedure(true);
             Ok(FsmContext::default())
         }
     }
@@ -2326,6 +2317,66 @@ mod tests {
         assert_eq!(condition_code, ConditionCode::PositiveAckLimitReached);
         assert_eq!(progress, file_size);
         fh_ref_mut.all_queues_empty();
+    }
+
+    #[test]
+    fn test_cancel_request_ack_limit_reached_abandonment() {
+        let mut tb = SourceHandlerTestbench::new(TransmissionMode::Acknowledged, false, 512);
+        let file_size = 0;
+        let mut eof_params = EofParams::new_success(file_size, CRC_32.digest().finalize());
+        let put_request = PutRequestOwned::new_regular_request(
+            REMOTE_ID.into(),
+            &tb.srcfile,
+            &tb.destfile,
+            Some(TransmissionMode::Acknowledged),
+            Some(false),
+        )
+        .expect("creating put request failed");
+        let mut user = tb.create_user(0, file_size);
+        let transfer_info =
+            tb.common_file_transfer_init_with_metadata_check(&mut user, put_request, file_size);
+        tb.common_eof_pdu_check(&mut user, transfer_info.closure_requested, eof_params, 1);
+
+        assert!(
+            tb.handler
+                .cancel_request(&mut user, &transfer_info.id)
+                .expect("cancellation failed")
+        );
+        eof_params.condition_code = ConditionCode::CancelRequestReceived;
+        tb.common_eof_pdu_check(&mut user, transfer_info.closure_requested, eof_params, 2);
+
+        // Enforce a postive ack timer expiry -> leads to a re-send of the EOF Cancel PDU.
+        tb.expiry_control.set_positive_ack_expired();
+        let sent_packets = tb
+            .handler
+            .state_machine_no_packet(&mut user)
+            .expect("source handler FSM failure");
+        assert_eq!(sent_packets, 1);
+        tb.common_eof_pdu_check(&mut user, transfer_info.closure_requested, eof_params, 3);
+
+        // Positive ACK limit reached while sending the EOF Cancel PDU -> Transaction abandoned
+        // without a second notice of cancellation.
+        tb.expiry_control.set_positive_ack_expired();
+        let sent_packets = tb
+            .handler
+            .state_machine_no_packet(&mut user)
+            .expect("source handler FSM failure");
+        assert_eq!(sent_packets, 0);
+        assert_eq!(tb.handler.state(), State::Idle);
+        assert!(tb.pdu_queue_empty());
+        let fault_handler = tb.test_fault_handler_mut();
+        let fh_ref_mut = fault_handler.get_mut();
+        assert!(fh_ref_mut.cancellation_queue_empty());
+        assert_eq!(fh_ref_mut.abandoned_queue.len(), 1);
+        let FaultInfo {
+            transaction_id,
+            condition_code,
+            progress,
+        } = fh_ref_mut.abandoned_queue.pop_back().unwrap();
+        assert_eq!(transaction_id, transfer_info.id);
+        assert_eq!(condition_code, ConditionCode::PositiveAckLimitReached);
+        assert_eq!(progress, file_size);
+        assert!(fh_ref_mut.all_queues_empty());
     }
 
     #[test]
