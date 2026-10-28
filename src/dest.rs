@@ -507,16 +507,16 @@ impl<
         if self.state() == super::State::Idle {
             return false;
         }
-        if let Some(active_id) = self.transaction_id() {
-            if active_id == *transaction_id {
-                self.trigger_notice_of_completion_cancelled(
-                    ConditionCode::CancelRequestReceived,
-                    EntityIdTlv::new(self.local_cfg.id),
-                );
+        if let Some(active_id) = self.transaction_id()
+            && active_id == *transaction_id
+        {
+            self.trigger_notice_of_completion_cancelled(
+                ConditionCode::CancelRequestReceived,
+                EntityIdTlv::new(self.local_cfg.id),
+            );
 
-                self.set_step(TransactionStep::TransferCompletion);
-                return true;
-            }
+            self.set_step(TransactionStep::TransferCompletion);
+            return true;
         }
         false
     }
@@ -757,13 +757,12 @@ impl<
     }
 
     fn reset_nak_activity_parameters_if_active(&mut self) {
-        if let Some(acked_params) = self.transaction_params.acked_params.as_mut() {
-            if acked_params.metadata_missing {
-                if let Some(timer) = self.transaction_params.deferred_procedure_timer.as_mut() {
-                    acked_params.nak_activity_counter = 0;
-                    timer.reset();
-                }
-            }
+        if let Some(acked_params) = self.transaction_params.acked_params.as_mut()
+            && acked_params.metadata_missing
+            && let Some(timer) = self.transaction_params.deferred_procedure_timer.as_mut()
+        {
+            acked_params.nak_activity_counter = 0;
+            timer.reset();
         }
     }
 
@@ -1135,10 +1134,10 @@ impl<
         );
         // Store this as progress for the checksum calculation as well.
         self.transaction_params.progress = eof_pdu.file_size();
-        if let Some(ack_params) = &self.transaction_params.acked_params {
-            if ack_params.metadata_missing {
-                return ControlFlow::Continue(());
-            }
+        if let Some(ack_params) = &self.transaction_params.acked_params
+            && ack_params.metadata_missing
+        {
+            return ControlFlow::Continue(());
         }
         if self.transaction_params.progress == 0 {
             // Empty file, no file data PDU.
@@ -1666,14 +1665,12 @@ impl<
                 return Err(e);
             }
         }
-        if self.step() == TransactionStep::WaitingForMetadata
-            || self.step() == TransactionStep::ReceivingFileDataPdus
+        if (self.step() == TransactionStep::WaitingForMetadata
+            || self.step() == TransactionStep::ReceivingFileDataPdus)
+            && let Some(ack_params) = &mut self.transaction_params.acked_params
+            && ack_params.deferred_procedure_active
         {
-            if let Some(ack_params) = &mut self.transaction_params.acked_params {
-                if ack_params.deferred_procedure_active {
-                    sent_packets += self.deferred_lost_segment_handling(cfdp_user)?;
-                }
-            }
+            sent_packets += self.deferred_lost_segment_handling(cfdp_user)?;
         }
         if self.step() == TransactionStep::ReceivingFileDataPdusWithCheckLimitHandling {
             self.check_limit_handling(cfdp_user)?;
@@ -1915,10 +1912,10 @@ impl<
             .get_fault_handler(condition_code);
         // CFDP 4.11.2.3.2: Any fault declared in the course of transferring the Finished (cancel)
         // PDU must result in abadonment of the transaction.
-        if let Some(positive_ack) = &self.transaction_params.positive_ack_params {
-            if positive_ack.positive_ack_of_cancellation {
-                fh_code = FaultHandlerCode::AbandonTransaction;
-            }
+        if let Some(positive_ack) = &self.transaction_params.positive_ack_params
+            && positive_ack.positive_ack_of_cancellation
+        {
+            fh_code = FaultHandlerCode::AbandonTransaction;
         }
         match fh_code {
             FaultHandlerCode::NoticeOfCancellation => {

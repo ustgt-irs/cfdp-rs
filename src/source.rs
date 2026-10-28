@@ -638,12 +638,12 @@ impl<
         if self.state() == super::State::Idle {
             return Ok(false);
         }
-        if let Some(active_id) = self.transaction_id() {
-            if active_id == *transaction_id {
-                // Control flow result can be ignored here for the cancel request.
-                self.notice_of_cancellation(user, ConditionCode::CancelRequestReceived)?;
-                return Ok(true);
-            }
+        if let Some(active_id) = self.transaction_id()
+            && active_id == *transaction_id
+        {
+            // Control flow result can be ignored here for the cancel request.
+            self.notice_of_cancellation(user, ConditionCode::CancelRequestReceived)?;
+            return Ok(true);
         }
         Ok(false)
     }
@@ -685,12 +685,12 @@ impl<
             self.set_step(TransactionStep::SendingFileData);
             sent_packets += 1;
         }
-        if self.step() == TransactionStep::SendingFileData {
-            if let ControlFlow::Break(packets) = self.file_data_fsm()? {
-                sent_packets += packets;
-                // Exit for each file data PDU to allow flow control.
-                return Ok(sent_packets);
-            }
+        if self.step() == TransactionStep::SendingFileData
+            && let ControlFlow::Break(packets) = self.file_data_fsm()?
+        {
+            sent_packets += packets;
+            // Exit for each file data PDU to allow flow control.
+            return Ok(sent_packets);
         }
         if self.step() == TransactionStep::SendingEof {
             self.eof_fsm(user)?;
@@ -1252,10 +1252,10 @@ impl<
         let mut fh = self.local_cfg.fault_handler.get_fault_handler(cond);
         // CFDP standard 4.11.2.2.3: Any fault declared in the course of transferring
         // the EOF (cancel) PDU must result in abandonment of the transaction.
-        if let Some(positive_ack_params) = self.transaction_params.positive_ack_params.get() {
-            if positive_ack_params.positive_ack_of_cancellation {
-                fh = FaultHandlerCode::AbandonTransaction;
-            }
+        if let Some(positive_ack_params) = self.transaction_params.positive_ack_params.get()
+            && positive_ack_params.positive_ack_of_cancellation
+        {
+            fh = FaultHandlerCode::AbandonTransaction;
         }
         let mut ctx = FsmContext::default();
         match fh {

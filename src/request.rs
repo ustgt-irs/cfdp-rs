@@ -162,15 +162,15 @@ pub fn generic_path_checks(
     source_file: Option<&str>,
     dest_file: Option<&str>,
 ) -> Result<(), FilePathTooLarge> {
-    if let Some(src_file) = source_file {
-        if src_file.len() > u8::MAX as usize {
-            return Err(FilePathTooLarge(src_file.len()));
-        }
+    if let Some(src_file) = source_file
+        && src_file.len() > u8::MAX as usize
+    {
+        return Err(FilePathTooLarge(src_file.len()));
     }
-    if let Some(dest_file) = dest_file {
-        if dest_file.len() > u8::MAX as usize {
-            return Err(FilePathTooLarge(dest_file.len()));
-        }
+    if let Some(dest_file) = dest_file
+        && dest_file.len() > u8::MAX as usize
+    {
+        return Err(FilePathTooLarge(dest_file.len()));
     }
     Ok(())
 }

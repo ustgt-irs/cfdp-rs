@@ -257,10 +257,10 @@ impl LostSegmentStore for LostSegmentsList {
         if lost_seg.0 > lost_seg.1 {
             return Err(LostSegmentError::StartLargerThanEnd(lost_seg.0, lost_seg.1));
         }
-        if let Some(capacity) = self.opt_capacity {
-            if self.list.len() == capacity {
-                return Err(LostSegmentError::StoreFull);
-            }
+        if let Some(capacity) = self.opt_capacity
+            && self.list.len() == capacity
+        {
+            return Err(LostSegmentError::StoreFull);
         }
         self.list.push((lost_seg.0, lost_seg.1));
         Ok(())

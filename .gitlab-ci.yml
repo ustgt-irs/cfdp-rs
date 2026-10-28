@@ -33,9 +33,9 @@ test:
     - just test
 
 msrv:
-  image: rust:1.87
   script:
-    - cargo check --release
+    - curl -LsSf https://github.com/taiki-e/cargo-hack/releases/latest/download/cargo-hack-x86_64-unknown-linux-gnu.tar.gz | tar zxf - -C /usr/local/cargo/bin
+    - just msrv
 
 check-fmt:
   cache: []
