@@ -330,8 +330,8 @@ pub struct SourceHandler<
 > {
     local_cfg: LocalEntityConfig<UserFaultHookInstance>,
     pdu_sender: PduSenderInstance,
-    pdu_and_cksum_buffer: RefCell<[u8; crate::buf_len::PACKET_BUF_LEN]>,
-    put_request_cacher: StaticPutRequestCacher<{ crate::buf_len::PACKET_BUF_LEN }>,
+    pdu_and_cksum_buffer: RefCell<[u8; crate::build_config::PACKET_BUF_LEN]>,
+    put_request_cacher: StaticPutRequestCacher<{ crate::build_config::PACKET_BUF_LEN }>,
     remote_cfg_table: RemoteConfigStoreInstance,
     vfs: Vfs,
     state_helper: StateHelper,
@@ -391,9 +391,10 @@ impl<
             local_cfg: cfg,
             remote_cfg_table,
             pdu_sender,
-            pdu_and_cksum_buffer: RefCell::new([0; crate::buf_len::PACKET_BUF_LEN]),
+            pdu_and_cksum_buffer: RefCell::new([0; crate::build_config::PACKET_BUF_LEN]),
             vfs,
-            put_request_cacher: StaticPutRequestCacher::<{ crate::buf_len::PACKET_BUF_LEN }>::new(),
+            put_request_cacher:
+                StaticPutRequestCacher::<{ crate::build_config::PACKET_BUF_LEN }>::new(),
             state_helper: Default::default(),
             transaction_params: Default::default(),
             anomalies: Default::default(),
