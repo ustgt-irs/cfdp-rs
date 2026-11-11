@@ -47,7 +47,6 @@ use super::{
     filestore::{FilestoreError, VirtualFilestore},
     user::{CfdpUser, FileSegmentRecvdParams, MetadataReceivedParams},
 };
-use smallvec::SmallVec;
 use spacepackets::{
     cfdp::{
         ChecksumType, ConditionCode, FaultHandlerCode, LargeFileFlag, PduType, TransactionStatus,
@@ -65,6 +64,8 @@ use spacepackets::{
     },
     util::UnsignedByteField,
 };
+
+use crate::build_config::{MAX_MSGS_TO_USER, PACKET_BUF_LEN};
 
 #[derive(Debug)]
 struct FileNames {
@@ -180,8 +181,7 @@ struct TransactionParams<CountdownInstance: Countdown> {
     pdu_conf: CommonPduConfig,
     file_names: FileNames,
     msgs_to_user_size: usize,
-    // TODO: Should we make this configurable?
-    msgs_to_user_buf: [u8; 2048],
+    msgs_to_user_buf: [u8; PACKET_BUF_LEN],
     remote_cfg: Option<RemoteEntityConfig>,
     transaction_id: Option<TransactionId>,
     metadata_params: MetadataGenericParams,
@@ -235,7 +235,7 @@ impl<CheckTimer: Countdown> Default for TransactionParams<CheckTimer> {
             pdu_conf: Default::default(),
             msgs_to_user_size: 0,
             file_size: 0,
-            msgs_to_user_buf: [0; 2048],
+            msgs_to_user_buf: [0; PACKET_BUF_LEN],
             file_names: Default::default(),
             remote_cfg: None,
             transaction_id: None,
@@ -316,6 +316,8 @@ pub enum DestError {
     NotImplemented,
     #[error("messages to user in metadata PDU exceed internal buffer size of {buf_len}")]
     MsgsToUserBufferTooSmall { buf_len: usize },
+    #[error("number of messages to user in metadata PDU exceeds maximum of {max}")]
+    TooManyMsgsToUser { max: usize },
 }
 
 /// This is the primary CFDP destination handler. It models the CFDP destination entity, which is
@@ -357,7 +359,7 @@ pub struct DestinationHandler<
     step: core::cell::Cell<TransactionStep>,
     state: State,
     transaction_params: TransactionParams<CountdownInstance>,
-    pdu_and_cksum_buffer: RefCell<[u8; crate::buf_len::PACKET_BUF_LEN]>,
+    pdu_and_cksum_buffer: RefCell<[u8; PACKET_BUF_LEN]>,
     pub pdu_sender: PduSenderInstance,
     pub vfs: VirtualFileStoreInstance,
     pub remote_cfg_table: RemoteConfigStoreInstance,
@@ -448,7 +450,7 @@ impl<
             step: Cell::new(TransactionStep::Idle),
             state: State::Idle,
             transaction_params: Default::default(),
-            pdu_and_cksum_buffer: core::cell::RefCell::new([0; crate::buf_len::PACKET_BUF_LEN]),
+            pdu_and_cksum_buffer: core::cell::RefCell::new([0; PACKET_BUF_LEN]),
             pdu_sender,
             vfs,
             remote_cfg_table,
@@ -736,10 +738,17 @@ impl<
         }
         self.transaction_params.msgs_to_user_size = 0;
         if !metadata_pdu.options().is_empty() {
+            let mut num_msgs_to_user = 0;
             for option_tlv in metadata_pdu.options_iter().unwrap() {
                 if option_tlv.is_standard_tlv()
                     && option_tlv.tlv_type().unwrap() == TlvType::MsgToUser
                 {
+                    num_msgs_to_user += 1;
+                    if num_msgs_to_user > MAX_MSGS_TO_USER {
+                        return Err(DestError::TooManyMsgsToUser {
+                            max: MAX_MSGS_TO_USER,
+                        });
+                    }
                     let raw = option_tlv.raw_data().unwrap();
                     let start = self.transaction_params.msgs_to_user_size;
                     let buf_len = self.transaction_params.msgs_to_user_buf.len();
@@ -1703,19 +1712,19 @@ impl<
             &self.transaction_params.file_names.src_file_name
                 [0..self.transaction_params.file_names.src_file_name_len],
         )?;
-        let mut msgs_to_user = SmallVec::<[MsgToUserTlv<'_>; 16]>::new();
-        let mut num_msgs_to_user = 0;
-        if self.transaction_params.msgs_to_user_size > 0 {
-            let mut index = 0;
-            while index < self.transaction_params.msgs_to_user_size {
-                // This should never panic as the validity of the options was checked beforehand.
-                let msgs_to_user_tlv =
-                    MsgToUserTlv::from_bytes(&self.transaction_params.msgs_to_user_buf[index..])
-                        .expect("message to user creation failed unexpectedly");
-                msgs_to_user.push(msgs_to_user_tlv);
-                index += msgs_to_user_tlv.len_full();
-                num_msgs_to_user += 1;
-            }
+        let mut msgs_to_user = heapless::Vec::<MsgToUserTlv<'_>, MAX_MSGS_TO_USER>::new();
+        let mut index = 0;
+        while index < self.transaction_params.msgs_to_user_size {
+            // The validity of the options was checked when the metadata PDU arrived.
+            let msgs_to_user_tlv =
+                MsgToUserTlv::from_bytes(&self.transaction_params.msgs_to_user_buf[index..])
+                    .expect("message to user creation failed unexpectedly");
+            msgs_to_user
+                .push(msgs_to_user_tlv)
+                .map_err(|_| DestError::TooManyMsgsToUser {
+                    max: MAX_MSGS_TO_USER,
+                })?;
+            index += msgs_to_user_tlv.len_full();
         }
         let metadata_recvd_params = MetadataReceivedParams {
             id,
@@ -1723,7 +1732,7 @@ impl<
             file_size: self.transaction_params.file_size(),
             src_file_name: src_name,
             dest_file_name: dest_name,
-            msgs_to_user: &msgs_to_user[..num_msgs_to_user],
+            msgs_to_user: &msgs_to_user,
         };
         cfdp_user.metadata_recvd_indication(&metadata_recvd_params);
         drop(msgs_to_user);
@@ -2984,6 +2993,13 @@ mod tests {
     /// enough Message To User TLVs must not be able to crash the destination handler.
     #[test]
     fn test_metadata_pdu_with_oversized_msgs_to_user_returns_error() {
+        // Smallest number of TLVs with the maximum value length of 255 bytes which exceeds the
+        // messages-to-user buffer.
+        let num_msgs = PACKET_BUF_LEN / 257 + 1;
+        // The count check would reject the PDU before the buffer check is reached.
+        if num_msgs > MAX_MSGS_TO_USER {
+            return;
+        }
         let fault_handler = TestFaultHandler::default();
         let mut tb = DestHandlerTestbench::new_with_fixed_paths(
             fault_handler,
@@ -2991,12 +3007,10 @@ mod tests {
             false,
         );
         let mut user = tb.test_user_from_cached_paths(0);
-        // 9 TLVs with the maximum value length of 255 bytes each (9 * 257 = 2313 bytes) exceed
-        // the destination handler's 2048-byte messages-to-user buffer.
         let msg_value = [0u8; 255];
-        let mut opts_buf = [0u8; 2313];
+        let mut opts_buf = alloc::vec![0u8; num_msgs * 257];
         let mut opts_len = 0;
-        for _ in 0..9 {
+        for _ in 0..num_msgs {
             let msg_to_user =
                 MsgToUserTlv::new(&msg_value).expect("creating msg to user tlv failed");
             opts_len += msg_to_user
@@ -3011,12 +3025,54 @@ mod tests {
             Lv::new_from_str(tb.dest_path.to_str().unwrap()).unwrap(),
             &opts_buf[..opts_len],
         );
-        let mut pdu_buf = [0u8; 4096];
+        let mut pdu_buf = alloc::vec![0u8; opts_len + 1024];
         let packet_info = create_packet_info(&metadata_pdu, &mut pdu_buf);
         let result = tb.handler.state_machine(&mut user, Some(&packet_info));
         assert!(matches!(
             result,
             Err(DestError::MsgsToUserBufferTooSmall { .. })
+        ));
+        tb.check_dest_file = false;
+        tb.check_handler_idle_at_drop = false;
+    }
+
+    #[test]
+    fn test_metadata_pdu_with_too_many_msgs_to_user_returns_error() {
+        // The buffer check would reject the PDU before the count check is reached.
+        if (MAX_MSGS_TO_USER + 1) * 2 > PACKET_BUF_LEN {
+            return;
+        }
+        let fault_handler = TestFaultHandler::default();
+        let mut tb = DestHandlerTestbench::new_with_fixed_paths(
+            fault_handler,
+            TransmissionMode::Unacknowledged,
+            false,
+        );
+        let mut user = tb.test_user_from_cached_paths(0);
+        let msg_to_user = MsgToUserTlv::new(&[]).expect("creating msg to user tlv failed");
+        let mut opts_buf = [0u8; (MAX_MSGS_TO_USER + 1) * 2];
+        let mut opts_len = 0;
+        for _ in 0..MAX_MSGS_TO_USER + 1 {
+            opts_len += msg_to_user
+                .write_to_slice(&mut opts_buf[opts_len..])
+                .expect("writing msg to user tlv failed");
+        }
+        let pdu_header = PduHeader::new_for_file_directive(tb.pdu_conf, 0);
+        let metadata_pdu = MetadataPduCreator::new_with_opts(
+            pdu_header,
+            MetadataGenericParams::new(false, ChecksumType::NullChecksum, 0),
+            Lv::new_from_str(tb.src_path.to_str().unwrap()).unwrap(),
+            Lv::new_from_str(tb.dest_path.to_str().unwrap()).unwrap(),
+            &opts_buf[..opts_len],
+        );
+        let mut pdu_buf = [0u8; 256 + (MAX_MSGS_TO_USER + 1) * 2];
+        let packet_info = create_packet_info(&metadata_pdu, &mut pdu_buf);
+        let result = tb.handler.state_machine(&mut user, Some(&packet_info));
+        assert!(matches!(
+            result,
+            Err(DestError::TooManyMsgsToUser {
+                max: MAX_MSGS_TO_USER
+            })
         ));
         tb.check_dest_file = false;
         tb.check_handler_idle_at_drop = false;

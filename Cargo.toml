@@ -21,7 +21,6 @@ name = "cfdp"
 
 [dependencies]
 crc = "3"
-smallvec = "1"
 hashbrown = { version = "0.17", optional = true }
 spacepackets = { workspace = true }
 thiserror = { version = "2", default-features = false }

@@ -15,9 +15,19 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - The internal buffer size is now set with the `CFDP_PACKET_BUF_LEN` environment variable at
   build time instead of the `packet-buf-*` features. The default stays at 2048 bytes. This keeps
   all features additive.
+- The destination handler collects messages to user in a `heapless::Vec` instead of a
+  `SmallVec`, so it never allocates. The capacity is set with the `CFDP_MAX_MSGS_TO_USER`
+  environment variable at build time. It defaults to 16 and must not exceed 256. This is a hard
+  limit now. Metadata PDUs with more messages to user are rejected with
+  `DestError::TooManyMsgsToUser`.
+- The buffer for received messages to user has the size `CFDP_PACKET_BUF_LEN` instead of a fixed
+  2048 bytes.
+- Renamed the `buf_len` module to `build_config`. It holds all constants set with environment
+  variables at build time.
 
 ## Removed
 
+- `smallvec` dependency.
 - `SourceHandler::abandon_transaction`. It only called `reset`. Use `cancel_request` to stop a
   transaction cleanly. Abandonment is only triggered by the fault handler.
 - `packet-buf-256`, `packet-buf-512`, `packet-buf-1k`, `packet-buf-2k` and `packet-buf-4k`

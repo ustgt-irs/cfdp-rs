@@ -60,8 +60,8 @@
 //! ## Buffer size selection
 //!
 //! The `CFDP_PACKET_BUF_LEN` environment variable sets the internal buffer size in bytes which is
-//! used for PDU generation and checksum calculation. This value possibly limits the size of the
-//! generated PDU packets. The default is 2048 bytes.
+//! used for PDU generation, checksum calculation and for storing received messages to user. This
+//! value possibly limits the size of the generated PDU packets. The default is 2048 bytes.
 //!
 //! The variable is read at build time. It can be set in the `.cargo/config.toml` of the
 //! application:
@@ -70,6 +70,10 @@
 //! [env]
 //! CFDP_PACKET_BUF_LEN = "1024"
 //! ```
+//!
+//! The `CFDP_MAX_MSGS_TO_USER` environment variable sets the maximum number of messages to user
+//! the destination handler accepts per metadata PDU. The default is 16 and the maximum is 256.
+//! It is read at build time as well.
 //!
 //! # Examples
 //!
@@ -118,7 +122,7 @@ extern crate alloc;
 #[cfg(any(feature = "std", test))]
 extern crate std;
 
-pub mod buf_len;
+pub mod build_config;
 pub mod dest;
 pub mod filestore;
 pub mod lost_segments;
