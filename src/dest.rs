@@ -314,8 +314,10 @@ pub enum DestError {
     InvalidRemoteConfig(RemoteEntityConfig),
     #[error("cfdp feature not implemented")]
     NotImplemented,
+    /// The transaction stays active. Use [DestinationHandler::cancel_request] to cancel it.
     #[error("messages to user in metadata PDU exceed internal buffer size of {buf_len}")]
     MsgsToUserBufferTooSmall { buf_len: usize },
+    /// The transaction stays active. Use [DestinationHandler::cancel_request] to cancel it.
     #[error("number of messages to user in metadata PDU exceeds maximum of {max}")]
     TooManyMsgsToUser { max: usize },
 }
@@ -3074,8 +3076,22 @@ mod tests {
                 max: MAX_MSGS_TO_USER
             })
         ));
+        // The transaction stays active until the user cancels it.
+        let id = tb.handler.transaction_id().expect("no active transaction");
+        assert!(tb.handler.cancel_request(&id));
+        let packets = tb
+            .handler
+            .state_machine_no_packet(&mut user)
+            .expect("state machine call after cancellation failed");
+        assert_eq!(packets, 0);
+        user.verify_finished_indication(
+            DeliveryCode::Complete,
+            ConditionCode::CancelRequestReceived,
+            id,
+            FileStatus::Unreported,
+        );
+        tb.state_check(State::Idle, TransactionStep::Idle);
         tb.check_dest_file = false;
-        tb.check_handler_idle_at_drop = false;
     }
 
     /// Regression test for a bug where `msgs_to_user_buf.copy_from_slice(..)` copied a message
